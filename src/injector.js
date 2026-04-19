@@ -1,27 +1,33 @@
-  // ─── Extra: High-priority paste event listener to stop propagation ──────────
-  // This helps block late-added paste blockers
-  document.addEventListener('paste', e => e.stopImmediatePropagation(), true);
 /**
  * ClipUnlock - injector.js
- * IMPORTANT: This file is READ by content.js and injected as an INLINE <script>
- * so it runs synchronously at document_start with ZERO network delay.
+ * Runs in the PAGE's JS world via synchronous inline injection from content.js.
  *
- * Execution order guarantee:
- *   1. content.js runs (document_start, extension isolated world)
- *   2. content.js reads this file via fetch() → inlines it as <script> text
- *   3. Inline script runs in PAGE world BEFORE any page JS
- *   4. All prototype overrides are in place before page scripts register handlers
+ * ⚠️  DO NOT put ANY code outside the IIFE below.
+ *     Anything outside runs in the raw page scope before our protections
+ *     are set up and can BREAK paste/copy on first attempt.
+ *
+ * HARD_BLOCK  (copy, cut, paste)
+ *   → Site's addEventListener handler is replaced with a no-op.
+ *     We NEVER call the site's handler — it steals clipboardData
+ *     and shows a fake "copied N chars" toast instead of real paste.
+ *
+ * SOFT_BLOCK  (contextmenu, selectstart, drag, mousedown…)
+ *   → Site's handler runs for UI side-effects, but cannot cancel the event.
  */
-(function (undefined) {
+(function () {
   'use strict';
 
-  // Already injected? Skip (can happen with iframes)
-  if (window.__clipunlock_v2) return;
-  window.__clipunlock_v2 = true;
+  // Guard: skip if already injected (iframes, re-navigation)
+  if (window.__clipunlock_v3) return;
+  window.__clipunlock_v3 = true;
 
-  // ─── Events we protect ───────────────────────────────────────────────────────
-  const CLIP = new Set([
-    'copy', 'cut', 'paste',
+  // ─── Event categories ─────────────────────────────────────────────────────────
+
+  // HARD: site handlers DROPPED entirely — clipboardData must not be touched
+  const HARD = new Set(['copy', 'cut', 'paste']);
+
+  // SOFT: site handlers run but cannot preventDefault/stopPropagation
+  const SOFT = new Set([
     'contextmenu',
     'selectstart', 'select',
     'mousedown', 'mouseup',
@@ -29,153 +35,173 @@
     'dragstart', 'drag', 'dragover', 'drop'
   ]);
 
-  // ─── Save true native references BEFORE anything can tamper with them ────────
-  const _addEventListener    = EventTarget.prototype.addEventListener;
-  const _removeEventListener = EventTarget.prototype.removeEventListener;
-  const _stopProp            = Event.prototype.stopPropagation;
-  const _stopImmediate       = Event.prototype.stopImmediatePropagation;
-  const _preventDefault      = Event.prototype.preventDefault;
+  const ALL = new Set([...HARD, ...SOFT]);
 
-  // ─── 1. Neuter stopImmediatePropagation / stopPropagation / preventDefault ───
-  //    These are the exact methods sites call to block paste, copy, etc.
+  // ─── Save native references FIRST before any page script can touch them ───────
+  const _addEL      = EventTarget.prototype.addEventListener;
+  const _removeEL   = EventTarget.prototype.removeEventListener;
+  const _stopProp   = Event.prototype.stopPropagation;
+  const _stopImmed  = Event.prototype.stopImmediatePropagation;
+  const _prevDef    = Event.prototype.preventDefault;
+
+  // ─── Layer 1: Neuter Event prototype methods ───────────────────────────────────
+  // Any site calling e.stopImmediatePropagation() / e.preventDefault() on a
+  // clipboard event gets a silent no-op.
+
   Event.prototype.stopPropagation = function () {
-    if (CLIP.has(this.type)) return; // silently swallow
+    if (ALL.has(this.type)) return;
     return _stopProp.call(this);
   };
 
   Event.prototype.stopImmediatePropagation = function () {
-    if (CLIP.has(this.type)) return; // silently swallow — THIS fixes the first-paste bug
-    return _stopImmediate.call(this);
+    if (ALL.has(this.type)) return;
+    return _stopImmed.call(this);
   };
 
   Event.prototype.preventDefault = function () {
-    if (CLIP.has(this.type)) return; // silently swallow
-    return _preventDefault.call(this);
+    if (ALL.has(this.type)) return;
+    return _prevDef.call(this);
   };
 
-  // ─── 2. Wrap addEventListener — neutralise handlers on document/window/body ──
+  // ─── Layer 2: Intercept addEventListener ──────────────────────────────────────
   EventTarget.prototype.addEventListener = function (type, fn, opts) {
-    if (!CLIP.has(type)) {
-      return _addEventListener.call(this, type, fn, opts);
+    // Not a protected event — pass through untouched
+    if (!ALL.has(type)) {
+      return _addEL.call(this, type, fn, opts);
     }
 
-    // Wrap listener so even if it tries to block, we override after
-    const wrappedFn = function (e) {
+    // HARD_BLOCK: copy / cut / paste
+    // Replace the site's handler with a silent no-op.
+    // Never call fn() — it reads clipboardData and blocks the real action.
+    if (HARD.has(type)) {
+      return _addEL.call(this, type, function () {}, opts);
+    }
+
+    // SOFT_BLOCK: contextmenu, selectstart, drag…
+    // Call the site handler for legitimate UI effects,
+    // but forcibly reset defaultPrevented so the browser still acts normally.
+    const safe = function (e) {
       try { fn.call(this, e); } catch (_) {}
-      // After handler runs, forcefully restore defaultPrevented = false
       try {
         Object.defineProperty(e, 'defaultPrevented', {
-          get: () => false, configurable: true
+          get: () => false,
+          configurable: true
         });
       } catch (_) {}
     };
-
-    wrappedFn.__clipunlock__ = true;
-    return _addEventListener.call(this, type, wrappedFn, opts);
+    safe.__clipunlock__ = true;
+    return _addEL.call(this, type, safe, opts);
   };
 
-  // ─── 3. Install our own HIGH-PRIORITY capture listeners on document + window ──
-  const earlyCapture = (_e) => { /* intentional no-op: claims the slot first */ };
-  CLIP.forEach(type => {
-    _addEventListener.call(document, type, earlyCapture, { capture: true, passive: true });
-    _addEventListener.call(window,   type, earlyCapture, { capture: true, passive: true });
+  // ─── Layer 3: High-priority capture listeners ─────────────────────────────────
+  // Register on document + window before any page script loads.
+  // For HARD events, call native stopImmediatePropagation to silence any
+  // capture handlers that somehow got in before us (edge cases / iframes).
+
+  HARD.forEach(type => {
+    // Non-passive so we can call stopImmediatePropagation
+    _addEL.call(document, type, function (e) {
+      _stopImmed.call(e); // silence any earlier capture handler
+    }, { capture: true });
+
+    _addEL.call(window, type, function (e) {
+      _stopImmed.call(e);
+    }, { capture: true });
   });
 
-  // ─── 4. Neutralise document-level on* properties ─────────────────────────────
-  const docOn = [
-    'oncopy','oncut','onpaste',
-    'oncontextmenu','onselectstart','ondragstart','ondrop'
+  SOFT.forEach(type => {
+    _addEL.call(document, type, function () {}, { capture: true, passive: true });
+    _addEL.call(window,   type, function () {}, { capture: true, passive: true });
+  });
+
+  // ─── Layer 4: Neutralise document/window on* property assignments ─────────────
+  // Defeats: document.oncopy = () => false
+  const ON_PROPS = [
+    'oncopy', 'oncut', 'onpaste',
+    'oncontextmenu', 'onselectstart',
+    'ondragstart', 'ondragover', 'ondrop'
   ];
-  docOn.forEach(prop => {
-    try {
-      Object.defineProperty(document, prop, {
-        get: () => null,
-        set: (_fn) => { /* swallow */ },
-        configurable: true
-      });
-      Object.defineProperty(window, prop, {
-        get: () => null,
-        set: (_fn) => { /* swallow */ },
-        configurable: true
-      });
-    } catch (_) {}
+
+  ON_PROPS.forEach(prop => {
+    const descriptor = { get: () => null, set: () => {}, configurable: true };
+    try { Object.defineProperty(document, prop, descriptor); } catch (_) {}
+    try { Object.defineProperty(window,   prop, descriptor); } catch (_) {}
   });
 
-  // ─── 5. CSS: force user-select on everything ──────────────────────────────────
-  const injectCSS = () => {
-    if (document.getElementById('__clipunlock_css__')) return;
+  // ─── Layer 5: CSS user-select override ────────────────────────────────────────
+  const CSS_ID = '__clipunlock_css__';
+
+  function injectCSS() {
+    if (document.getElementById(CSS_ID)) return;
     const s = document.createElement('style');
-    s.id = '__clipunlock_css__';
-    s.textContent = [
-      '*, *::before, *::after {',
-      '  -webkit-user-select: text !important;',
-      '  -moz-user-select:    text !important;',
-      '  -ms-user-select:     text !important;',
-      '  user-select:         text !important;',
-      '  pointer-events:      auto !important;',
-      '}',
-      'body { -webkit-user-select: text !important; user-select: text !important; }'
-    ].join('\n');
-    const target = document.head || document.documentElement;
-    if (target) target.appendChild(s);
-  };
-  injectCSS();
-  if (document.readyState === 'loading') {
-    _addEventListener.call(document, 'DOMContentLoaded', injectCSS, { once: true });
+    s.id = CSS_ID;
+    s.textContent =
+      '*, *::before, *::after {' +
+      '  -webkit-user-select: text !important;' +
+      '  -moz-user-select: text !important;' +
+      '  user-select: text !important;' +
+      '  pointer-events: auto !important;' +
+      '}';
+    (document.head || document.documentElement || document.body)
+      .appendChild(s);
   }
 
-  // ─── 6. MutationObserver — clear inline on* attrs on every new element ────────
-  const INLINE_ATTRS = [
-    'oncopy','oncut','onpaste',
-    'oncontextmenu','onselectstart',
-    'onmousedown','onmouseup',
-    'ondragstart','ondragover','ondrop'
+  // Inject now; also after DOM is ready (some sites wipe <head>)
+  injectCSS();
+  _addEL.call(document, 'DOMContentLoaded', injectCSS, { once: true });
+
+  // ─── Layer 6: MutationObserver — strip inline on* attributes ─────────────────
+  const INLINE = [
+    'oncopy', 'oncut', 'onpaste',
+    'oncontextmenu', 'onselectstart',
+    'onmousedown', 'onmouseup',
+    'ondragstart', 'ondragover', 'ondrop'
   ];
 
-  const clearNode = (node) => {
-    if (node.nodeType !== 1) return;
-    INLINE_ATTRS.forEach(attr => {
-      if (node.hasAttribute(attr)) node.setAttribute(attr, 'void 0;');
-    });
-  };
+  function clearEl(el) {
+    if (!el || el.nodeType !== 1) return;
+    INLINE.forEach(a => { if (el.hasAttribute(a)) el.setAttribute(a, 'void 0'); });
+  }
 
-  const mo = new MutationObserver((muts) => {
+  const mo = new MutationObserver(muts => {
     muts.forEach(m => {
-      m.addedNodes.forEach(n => {
-        clearNode(n);
-        if (n.querySelectorAll) n.querySelectorAll('*').forEach(clearNode);
-      });
-      if (m.type === 'attributes') clearNode(m.target);
+      if (m.type === 'attributes') {
+        clearEl(m.target);
+      } else {
+        m.addedNodes.forEach(n => {
+          clearEl(n);
+          if (n.querySelectorAll) n.querySelectorAll('*').forEach(clearEl);
+        });
+      }
     });
   });
 
-  const startMO = () => {
+  function startMO() {
     const root = document.documentElement || document.body;
     if (!root) return;
-    document.querySelectorAll('*').forEach(clearNode);
+    document.querySelectorAll && document.querySelectorAll('*').forEach(clearEl);
     mo.observe(root, {
-      childList:       true,
-      subtree:         true,
-      attributes:      true,
-      attributeFilter: INLINE_ATTRS
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: INLINE
     });
-  };
+  }
 
   if (document.readyState === 'loading') {
-    _addEventListener.call(document, 'DOMContentLoaded', startMO, { once: true });
+    _addEL.call(document, 'DOMContentLoaded', startMO, { once: true });
   } else {
     startMO();
   }
 
-  // ─── 7. Periodic re-guard (SPAs re-attach handlers after navigation) ──────────
-  const reGuard = () => {
-    docOn.forEach(prop => {
-      try { document[prop] = null; } catch(_) {}
-    });
+  // ─── Layer 7: Periodic re-guard for SPAs ──────────────────────────────────────
+  // React/Vue/Angular re-attach handlers on client navigation — re-neutralise every 2s.
+  setInterval(() => {
+    ON_PROPS.forEach(p => { try { document[p] = null; } catch (_) {} });
     injectCSS();
-  };
-  setInterval(reGuard, 2000);
+  }, 2000);
 
+  // ─── Done ─────────────────────────────────────────────────────────────────────
   window.__clipunlock_active = true;
 
 })();
