@@ -1,3 +1,6 @@
+  // ─── Extra: High-priority paste event listener to stop propagation ──────────
+  // This helps block late-added paste blockers
+  document.addEventListener('paste', e => e.stopImmediatePropagation(), true);
 /**
  * ClipUnlock - injector.js
  * IMPORTANT: This file is READ by content.js and injected as an INLINE <script>
