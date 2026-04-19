@@ -30,40 +30,21 @@
     return true; // default: enabled
   }
 
-  // ─── Fetch injector code and inline it NOW (synchronously at doc_start) ──────
-  function injectInline() {
-    // Read the injector.js file as text and inject it as an inline script.
-    // fetch() is async but we use XMLHttpRequest synchronously to avoid delay.
+  // ─── Inject external script to bypass CSP ───────────────
+  function injectExternal() {
     try {
-      const url = chrome.runtime.getURL('src/injector.js');
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url, false); // false = synchronous
-      xhr.send();
-
-      if (xhr.status === 200) {
-        const script = document.createElement('script');
-        script.textContent = xhr.responseText; // INLINE — no src, no network delay
-        script.setAttribute('data-clipunlock', '2');
-        const target = document.documentElement || document.head || document.body;
-        if (target) {
-          target.insertBefore(script, target.firstChild);
-          script.remove(); // clean up DOM after execution
-        }
-      }
-    } catch (e) {
-      // Fallback: try async src injection (better than nothing)
-      try {
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('src/injector.js');
-        (document.head || document.documentElement).appendChild(script);
-      } catch (_) {}
-    }
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('src/injector.js');
+      script.setAttribute('data-clipunlock', '2');
+      (document.head || document.documentElement).appendChild(script);
+      script.onload = function() { script.remove(); };
+    } catch (_) {}
   }
 
   // ─── Main: check state then inject ───────────────────────────────────────────
   // Inject immediately — don't wait for storage
   if (isEnabledSync()) {
-    injectInline();
+    injectExternal();
   }
 
   // Then verify with actual storage (and update sessionStorage cache)
