@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClipUnlock</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="shell">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <rect x="8" y="2" width="8" height="10" rx="2" stroke="currentColor" stroke-width="2"/>
+            <rect x="3" y="12" width="18" height="10" rx="2" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 12v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="17" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+        <span class="logo-text">ClipUnlock</span>
+      </div>
+      <div class="version">v1.0</div>
+    </header>
+
+    <!-- Status Card -->
+    <div class="status-card" id="statusCard">
+      <div class="status-indicator" id="statusIndicator">
+        <div class="pulse-ring"></div>
+        <div class="status-dot"></div>
+      </div>
+      <div class="status-text">
+        <div class="status-label" id="statusLabel">Active on this page</div>
+        <div class="status-sub" id="statusSub">All restrictions removed</div>
+      </div>
+      <div class="status-badge" id="statusBadge">ON</div>
+    </div>
+
+    <!-- Site toggle -->
+    <div class="section">
+      <div class="section-label">THIS SITE</div>
+      <div class="toggle-row" id="siteToggleRow">
+        <div class="toggle-info">
+          <div class="toggle-title" id="siteHostname">example.com</div>
+          <div class="toggle-desc">Override for this domain only</div>
+        </div>
+        <label class="switch" id="siteSwitch">
+          <input type="checkbox" id="siteToggle" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Global toggle -->
+    <div class="section">
+      <div class="section-label">GLOBAL</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="toggle-title">All websites</div>
+          <div class="toggle-desc">Enable on every page by default</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="globalToggle" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Feature badges -->
+    <div class="section">
+      <div class="section-label">UNBLOCKED</div>
+      <div class="features">
+        <div class="feature-chip active" id="chip-copy">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </div>
+        <div class="feature-chip active" id="chip-cut">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="6" cy="20" r="2"/><circle cx="6" cy="4" r="2"/><line x1="6" y1="6" x2="6" y2="18"/><line x1="6" y1="12" x2="21" y2="3"/><line x1="6" y1="12" x2="21" y2="21"/></svg>
+          Cut
+        </div>
+        <div class="feature-chip active" id="chip-paste">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+          Paste
+        </div>
+        <div class="feature-chip active" id="chip-rightclick">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="12" x2="12" y2="18"/><polyline points="9 15 12 18 15 15"/></svg>
+          Right-Click
+        </div>
+        <div class="feature-chip active" id="chip-select">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Select Text
+        </div>
+        <div class="feature-chip active" id="chip-drag">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>
+          Drag & Drop
+        </div>
+      </div>
+    </div>
+
+    <!-- Reload notice -->
+    <div class="reload-notice" id="reloadNotice" style="display:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      <span>Reload tab to apply changes</span>
+      <button class="reload-btn" id="reloadBtn">Reload</button>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-text">Bypasses JS event restrictions & CSS user-select</div>
+    </footer>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
