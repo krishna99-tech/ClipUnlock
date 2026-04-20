@@ -20,6 +20,10 @@
   // Guard: skip if already injected (iframes, re-navigation)
   if (window.__clipunlock_v3) return;
   window.__clipunlock_v3 = true;
+  
+  // Set DOM marker for status reporting (visible to isolated world)
+  document.documentElement.setAttribute('data-clipunlock-status', 'active');
+
 
   // ─── Event categories ─────────────────────────────────────────────────────────
 

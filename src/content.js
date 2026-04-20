@@ -6,67 +6,62 @@
  * text and inject it as an INLINE <script>. This guarantees our prototype
  * overrides run BEFORE the page's own scripts — making copy/paste/cut work
  * on the very first attempt.
- *
- * Using script.src instead would introduce an async network delay, allowing
- * the page's blocking handlers to register first → first paste shows a count
- * toast instead of actually pasting.
  */
 (function () {
   'use strict';
 
-  // ─── Synchronous enabled check (no async storage wait) ───────────────────────
-  // We cache the state in sessionStorage so document_start injection is instant.
-  // chrome.storage.sync updates the cache asynchronously for the next load.
+  const CACHE_KEY = '__clipunlock_enabled__';
+  const ATTR_STATUS = 'data-clipunlock-status';
+
+  /**
+   * Synchronous check for enabled state using sessionStorage cache.
+   * This is fast enough to run at document_start without perceived delay.
+   */
   function isEnabledSync() {
     try {
-      const v = sessionStorage.getItem('__clipunlock_enabled__');
+      const v = sessionStorage.getItem(CACHE_KEY);
       if (v !== null) return v === '1';
     } catch (_) {}
-    return true; // default ON
+    return true; // Default ON
   }
 
-  // ─── Inline injection via synchronous XHR ────────────────────────────────────
-  // Reads injector.js as a text string and inserts it as an inline <script>.
-  // Inline scripts execute synchronously and immediately — zero network delay.
+  /**
+   * Injects injector.js using a script.src URL.
+   * This approach is CSP-compliant and avoids "unsafe-inline" errors.
+   */
   function injectInline() {
+    // Avoid double injection
+    if (document.documentElement.hasAttribute('data-clipunlock-v3')) return false;
+
     try {
-      const url = chrome.runtime.getURL('src/injector.js');
+      const script = document.createElement('script');
+      script.src = chrome.runtime.getURL('src/injector.js');
+      script.setAttribute('data-clipunlock', 'v3');
+      
+      // Setting async=false ensures the script executes in order 
+      // as soon as it is fetched from the extension local storage.
+      script.async = false;
 
-      // Synchronous XHR (false = sync) — blocks until file is read
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url, false);
-      xhr.send(null);
+      const root = document.documentElement;
+      root.insertBefore(script, root.firstChild);
+      root.setAttribute('data-clipunlock-v3', 'true');
 
-      if (xhr.status === 200 && xhr.responseText) {
-        const script = document.createElement('script');
-        script.textContent = xhr.responseText; // ← INLINE, not src=
-        script.setAttribute('data-clipunlock', 'v3');
-
-        // Insert as FIRST child of <html> — before any page <script> can load
-        const root = document.documentElement;
-        root.insertBefore(script, root.firstChild);
-
-        // Remove the tag immediately after it executes (keep DOM clean)
-        script.remove();
-        return true;
-      }
+      // Note: We don't remove() the script immediately here relative to its load
+      // because it's an external resource. It will run as soon as it's appended.
+      return true;
     } catch (err) {
-      // XHR failed (rare) — fall back to script.src as last resort
-      try {
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('src/injector.js');
-        document.documentElement.appendChild(script);
-      } catch (_) {}
+      console.warn('[ClipUnlock] Injection failed:', err);
     }
     return false;
   }
 
-  // ─── Inject immediately — before any page JS runs ────────────────────────────
+
+  // ─── Immediate Injection ─────────────────────────────────────────────────────
   if (isEnabledSync()) {
     injectInline();
   }
 
-  // ─── Async: verify with real storage and update cache ────────────────────────
+  // ─── Async Storage Sync & Cache Update ───────────────────────────────────────
   const origin = location.hostname;
 
   chrome.storage.sync.get(['enabled', 'siteOverrides'], (data) => {
@@ -74,29 +69,36 @@
     const overrides     = data.siteOverrides || {};
     const enabled       = (origin in overrides) ? overrides[origin] : globalEnabled;
 
-    // Update sessionStorage cache for next page load
+    // Update sessionStorage cache for the next page load or navigation
     try {
-      sessionStorage.setItem('__clipunlock_enabled__', enabled ? '1' : '0');
+      sessionStorage.setItem(CACHE_KEY, enabled ? '1' : '0');
     } catch (_) {}
 
-    // If disabled: signal injector to stand down
+    // If the user just disabled it, signal any active scripts to stand down.
+    // Note: Prototype overrides are hard to undo without reload, hence why 
+    // the popup recommends a reload.
     if (!enabled) {
+      document.documentElement.removeAttribute(ATTR_STATUS);
       try {
         const s = document.createElement('script');
-        s.textContent =
-          'window.__clipunlock_disabled = true;' +
-          'window.__clipunlock_active = false;';
-        (document.head || document.documentElement).appendChild(s);
+        s.textContent = 'window.__clipunlock_disabled = true; window.__clipunlock_active = false;';
+        document.documentElement.appendChild(s);
         s.remove();
       } catch (_) {}
     }
   });
 
-  // ─── Message handler (popup ↔ content communication) ─────────────────────────
+  // ─── Message Handler (Status bridge between worlds) ──────────────────────────
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.action === 'ping')      { sendResponse({ alive: true }); }
-    if (msg.action === 'getStatus') { sendResponse({ active: !!window.__clipunlock_active }); }
+    if (msg.action === 'ping') {
+      sendResponse({ alive: true });
+    } else if (msg.action === 'getStatus') {
+      // The isolated world checks the DOM marker set by the main world script
+      const active = document.documentElement.getAttribute(ATTR_STATUS) === 'active';
+      sendResponse({ active: active });
+    }
     return true;
   });
 
 })();
+
