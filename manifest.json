@@ -42,8 +42,9 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/injector.js", "icons/*.png"],
+      "resources": ["src/injector.js", "src/injector.css", "icons/*.png"],
       "matches": ["<all_urls>"]
     }
   ]
+
 }

@@ -137,18 +137,18 @@
 
   function injectCSS() {
     if (document.getElementById(CSS_ID)) return;
-    const s = document.createElement('style');
-    s.id = CSS_ID;
-    s.textContent =
-      '*, *::before, *::after {' +
-      '  -webkit-user-select: text !important;' +
-      '  -moz-user-select: text !important;' +
-      '  user-select: text !important;' +
-      '  pointer-events: auto !important;' +
-      '}';
-    (document.head || document.documentElement || document.body)
-      .appendChild(s);
+    
+    // Get base URL from DOM (set by content script)
+    const baseUrl = document.documentElement.getAttribute('data-clipunlock-base-url') || '';
+    
+    const link = document.createElement('link');
+    link.id = CSS_ID;
+    link.rel = 'stylesheet';
+    link.href = baseUrl + 'src/injector.css';
+    
+    (document.head || document.documentElement).appendChild(link);
   }
+
 
   // Inject now; also after DOM is ready (some sites wipe <head>)
   injectCSS();

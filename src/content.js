@@ -43,8 +43,10 @@
       script.async = false;
 
       const root = document.documentElement;
-      root.insertBefore(script, root.firstChild);
       root.setAttribute('data-clipunlock-v3', 'true');
+      root.setAttribute('data-clipunlock-base-url', chrome.runtime.getURL(''));
+      root.insertBefore(script, root.firstChild);
+
 
       // Note: We don't remove() the script immediately here relative to its load
       // because it's an external resource. It will run as soon as it's appended.
