@@ -25,42 +25,11 @@
     return true; // Default ON
   }
 
-  /**
-   * Injects injector.js using a script.src URL.
-   * This approach is CSP-compliant and avoids "unsafe-inline" errors.
-   */
-  function injectInline() {
-    // Avoid double injection
-    if (document.documentElement.hasAttribute('data-clipunlock-v3')) return false;
-
-    try {
-      const script = document.createElement('script');
-      script.src = chrome.runtime.getURL('src/injector.js');
-      script.setAttribute('data-clipunlock', 'v3');
-      
-      // Setting async=false ensures the script executes in order 
-      // as soon as it is fetched from the extension local storage.
-      script.async = false;
-
-      const root = document.documentElement;
-      root.setAttribute('data-clipunlock-v3', 'true');
-      root.setAttribute('data-clipunlock-base-url', chrome.runtime.getURL(''));
-      root.insertBefore(script, root.firstChild);
-
-
-      // Note: We don't remove() the script immediately here relative to its load
-      // because it's an external resource. It will run as soon as it's appended.
-      return true;
-    } catch (err) {
-      console.warn('[ClipUnlock] Injection failed:', err);
-    }
-    return false;
-  }
-
-
   // ─── Immediate Injection ─────────────────────────────────────────────────────
+  // (Now handled by manifest.json with world: "MAIN" for CSP compliance)
   if (isEnabledSync()) {
-    injectInline();
+    // We still ensure the session storage is primed
+    try { sessionStorage.setItem(CACHE_KEY, '1'); } catch(_) {}
   }
 
   // ─── Async Storage Sync & Cache Update ───────────────────────────────────────

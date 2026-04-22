@@ -17,6 +17,11 @@
 (function () {
   'use strict';
 
+  // Quick check if disabled for this site/session
+  try {
+    if (sessionStorage.getItem('__clipunlock_enabled__') === '0') return;
+  } catch (_) {}
+
   // Guard: skip if already injected (iframes, re-navigation)
   if (window.__clipunlock_v3) return;
   window.__clipunlock_v3 = true;
@@ -28,10 +33,14 @@
   // ─── Event categories ─────────────────────────────────────────────────────────
 
   // HARD: site handlers DROPPED entirely
-  const HARD = new Set(['copy', 'cut', 'paste', 'visibilitychange', 'webkitvisibilitychange', 'pagehide', 'beforeunload']);
+  const HARD = new Set([
+    'copy', 'cut', 'paste', 
+    'visibilitychange', 'webkitvisibilitychange', 'pagehide', 'beforeunload',
+    'fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange'
+  ]);
 
   // ROOT_ONLY: Only blocked on window/document (to protect elements like inputs)
-  const ROOT_ONLY = new Set(['blur', 'focus', 'focusin', 'focusout', 'mouseleave', 'mouseout']);
+  const ROOT_ONLY = new Set(['blur', 'focus', 'focusin', 'focusout', 'mouseleave', 'mouseout', 'resize']);
 
   // SOFT: site handlers run but cannot preventDefault/stopPropagation
   const SOFT = new Set([
@@ -74,19 +83,46 @@
   // Bypasses tab-switching detection by forcing visibility properties to always
   // indicate the page is focused and visible.
   try {
-    const fakeVisible = { get: () => 'visible', set: () => {}, configurable: false };
-    const fakeHidden = { get: () => false, set: () => {}, configurable: false };
-    
-    Object.defineProperty(document, 'visibilityState', fakeVisible);
-    Object.defineProperty(document, 'webkitVisibilityState', fakeVisible);
-    Object.defineProperty(document, 'hidden', fakeHidden);
-    Object.defineProperty(document, 'webkitHidden', fakeHidden);
+    // Visibility State
+    [
+      ['visibilityState', 'visible'], ['webkitVisibilityState', 'visible'],
+      ['hidden', false], ['webkitHidden', false]
+    ].forEach(([prop, val]) => {
+      try {
+        Object.defineProperty(document, prop, { get: () => val, set: () => {}, configurable: false });
+      } catch (_) {
+        try { Object.defineProperty(document, prop, { get: () => val, set: () => {} }); } catch (__) {}
+      }
+    });
     
     // Some sites use document.hasFocus() to check activity
-    document.hasFocus = function() { return true; };
+    try { document.hasFocus = function() { return true; }; } catch (_) {}
     
     // Prevent sites from calling window.blur() to hide or track
-    Window.prototype.blur = function() { return; };
+    try { Window.prototype.blur = function() { return; }; } catch (_) {}
+
+    // Fullscreen Mocking: Always appear to be in fullscreen
+    const fsProps = ['fullscreenElement', 'webkitFullscreenElement', 'mozFullScreenElement', 'msFullscreenElement'];
+    fsProps.forEach(p => {
+      try {
+        Object.defineProperty(document, p, { get: () => (document.documentElement || null), configurable: false });
+      } catch (_) {
+        try { Object.defineProperty(document, p, { get: () => (document.documentElement || null) }); } catch (__) {}
+      }
+    });
+
+    const fsEnabledProps = ['fullscreenEnabled', 'webkitFullscreenEnabled', 'mozFullScreenEnabled', 'msFullScreenEnabled'];
+    fsEnabledProps.forEach(p => {
+      try {
+        Object.defineProperty(document, p, { get: () => true, configurable: false });
+      } catch (_) {
+        try { Object.defineProperty(document, p, { get: () => true }); } catch (__) {}
+      }
+    });
+    
+    // Older boolean props
+    try { Object.defineProperty(document, 'webkitIsFullScreen', { get: () => true, configurable: false }); } catch (_) {}
+    try { Object.defineProperty(document, 'fullscreen', { get: () => true, configurable: false }); } catch (_) {}
   } catch (_) {}
 
   // ─── Layer 2: Intercept addEventListener ──────────────────────────────────────
@@ -152,7 +188,8 @@
     'oncontextmenu', 'onselectstart',
     'ondragstart', 'ondragover', 'ondrop',
     'onblur', 'onfocus', 'onvisibilitychange', 'onwebkitvisibilitychange',
-    'onmouseleave', 'onmouseout', 'onbeforeunload'
+    'onmouseleave', 'onmouseout', 'onbeforeunload',
+    'onfullscreenchange', 'onwebkitfullscreenchange', 'onresize'
   ];
 
   ON_PROPS.forEach(prop => {
