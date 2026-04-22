@@ -27,8 +27,11 @@
 
   // ─── Event categories ─────────────────────────────────────────────────────────
 
-  // HARD: site handlers DROPPED entirely — clipboardData must not be touched
-  const HARD = new Set(['copy', 'cut', 'paste']);
+  // HARD: site handlers DROPPED entirely
+  const HARD = new Set(['copy', 'cut', 'paste', 'visibilitychange', 'webkitvisibilitychange', 'pagehide', 'beforeunload']);
+
+  // ROOT_ONLY: Only blocked on window/document (to protect elements like inputs)
+  const ROOT_ONLY = new Set(['blur', 'focus', 'focusin', 'focusout', 'mouseleave', 'mouseout']);
 
   // SOFT: site handlers run but cannot preventDefault/stopPropagation
   const SOFT = new Set([
@@ -39,7 +42,7 @@
     'dragstart', 'drag', 'dragover', 'drop'
   ]);
 
-  const ALL = new Set([...HARD, ...SOFT]);
+  const ALL = new Set([...HARD, ...ROOT_ONLY, ...SOFT]);
 
   // ─── Save native references FIRST before any page script can touch them ───────
   const _addEL      = EventTarget.prototype.addEventListener;
@@ -67,6 +70,25 @@
     return _prevDef.call(this);
   };
 
+  // ─── Layer 1.5: Visibility Mocking (Forceful) ────────────────────────────────
+  // Bypasses tab-switching detection by forcing visibility properties to always
+  // indicate the page is focused and visible.
+  try {
+    const fakeVisible = { get: () => 'visible', set: () => {}, configurable: false };
+    const fakeHidden = { get: () => false, set: () => {}, configurable: false };
+    
+    Object.defineProperty(document, 'visibilityState', fakeVisible);
+    Object.defineProperty(document, 'webkitVisibilityState', fakeVisible);
+    Object.defineProperty(document, 'hidden', fakeHidden);
+    Object.defineProperty(document, 'webkitHidden', fakeHidden);
+    
+    // Some sites use document.hasFocus() to check activity
+    document.hasFocus = function() { return true; };
+    
+    // Prevent sites from calling window.blur() to hide or track
+    Window.prototype.blur = function() { return; };
+  } catch (_) {}
+
   // ─── Layer 2: Intercept addEventListener ──────────────────────────────────────
   EventTarget.prototype.addEventListener = function (type, fn, opts) {
     // Not a protected event — pass through untouched
@@ -74,10 +96,14 @@
       return _addEL.call(this, type, fn, opts);
     }
 
-    // HARD_BLOCK: copy / cut / paste
-    // Replace the site's handler with a silent no-op.
-    // Never call fn() — it reads clipboardData and blocks the real action.
+    // HARD_BLOCK: clipboard / visibility
     if (HARD.has(type)) {
+      return _addEL.call(this, type, function () {}, opts);
+    }
+
+    // ROOT_ONLY_BLOCK: window blur / focus / mouseleave
+    // We block these specifically on window/document to hide tab-switching.
+    if (ROOT_ONLY.has(type) && (this === window || this === document)) {
       return _addEL.call(this, type, function () {}, opts);
     }
 
@@ -98,18 +124,19 @@
   };
 
   // ─── Layer 3: High-priority capture listeners ─────────────────────────────────
-  // Register on document + window before any page script loads.
-  // For HARD events, call native stopImmediatePropagation to silence any
-  // capture handlers that somehow got in before us (edge cases / iframes).
-
+  // Register on document + window to silence events before site handlers fire.
+  
   HARD.forEach(type => {
-    // Non-passive so we can call stopImmediatePropagation
-    _addEL.call(document, type, function (e) {
-      _stopImmed.call(e); // silence any earlier capture handler
-    }, { capture: true });
+    _addEL.call(document, type, e => _stopImmed.call(e), { capture: true });
+    _addEL.call(window,   type, e => _stopImmed.call(e), { capture: true });
+  });
 
-    _addEL.call(window, type, function (e) {
-      _stopImmed.call(e);
+  ROOT_ONLY.forEach(type => {
+    _addEL.call(window, type, function(e) {
+      if (e.target === window || e.target === document) _stopImmed.call(e);
+    }, { capture: true });
+    _addEL.call(document, type, function(e) {
+      if (e.target === window || e.target === document) _stopImmed.call(e);
     }, { capture: true });
   });
 
@@ -123,11 +150,13 @@
   const ON_PROPS = [
     'oncopy', 'oncut', 'onpaste',
     'oncontextmenu', 'onselectstart',
-    'ondragstart', 'ondragover', 'ondrop'
+    'ondragstart', 'ondragover', 'ondrop',
+    'onblur', 'onfocus', 'onvisibilitychange', 'onwebkitvisibilitychange',
+    'onmouseleave', 'onmouseout', 'onbeforeunload'
   ];
 
   ON_PROPS.forEach(prop => {
-    const descriptor = { get: () => null, set: () => {}, configurable: true };
+    const descriptor = { get: () => null, set: () => {}, configurable: false };
     try { Object.defineProperty(document, prop, descriptor); } catch (_) {}
     try { Object.defineProperty(window,   prop, descriptor); } catch (_) {}
   });
@@ -201,7 +230,10 @@
   // ─── Layer 7: Periodic re-guard for SPAs ──────────────────────────────────────
   // React/Vue/Angular re-attach handlers on client navigation — re-neutralise every 2s.
   setInterval(() => {
-    ON_PROPS.forEach(p => { try { document[p] = null; } catch (_) {} });
+    ON_PROPS.forEach(p => { 
+      try { document[p] = null; } catch (_) {} 
+      try { window[p] = null; } catch (_) {} 
+    });
     injectCSS();
   }, 2000);
 
